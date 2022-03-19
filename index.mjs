@@ -10,6 +10,7 @@ import {
   zip,
   _metaLevelConfig,
   _createInFileCsvType,
+  populateEmptyField,
 } from './util.js';
 
 const { BASEURI, BASEAPI } = process.env;
@@ -100,12 +101,20 @@ async function fetchSmsDescription(csv) {
       ],
     } = resolveValue.value;
     if (resolveValue.status === 'fulfilled') {
-      return Object.assign(csv[index], { messageId, description });
+      return updateRecord(csv[index], { messageId, description });
     }
     return csv[index];
   });
 
   return finalResult;
+}
+
+function updateRecord(previousRecord, nextPartialRecord) {
+  const entries = Object.entries(nextPartialRecord);
+  entries.forEach(function ([key, value]) {
+    populateEmptyField(previousRecord, key, value, false);
+  });
+  return previousRecord;
 }
 
 function convertInMemoryCsvToFileType([titles, rows]) {
