@@ -11,6 +11,7 @@ import {
   _metaLevelConfig,
   _createInFileCsvType,
   populateEmptyField,
+  generateMessageId,
 } from './util.js';
 
 const { BASEURI, BASEAPI } = process.env;
@@ -70,7 +71,7 @@ function getDescriptionFromInfoBip(csv) {
           messages: [
             {
               from: info.SenderId,
-              destinations: [{ to: info.MSISDN }],
+              destinations: [{ to: info.MSISDN, messageId: info.messageId }],
               text: 'Dear Customer, Thanks for registering with our service.',
             },
           ],
@@ -88,33 +89,26 @@ function getDescriptionFromInfoBip(csv) {
   );
 }
 
+function insertMessageId(smsEntries) {
+  smsEntries.forEach((entry) => {
+    if (!entry._emptyFields.includes('messageId')) return;
+    populateEmptyField(entry, 'messageId', generateMessageId(), false);
+  });
+}
+
 async function fetchSmsDescription(csv) {
+  insertMessageId(csv);
   const data = await getDescriptionFromInfoBip(csv);
 
-  const finalResult = data.map((resolveValue, index) => {
-    const {
-      messages: [
-        {
-          messageId,
-          status: { description },
-        },
-      ],
-    } = resolveValue.value;
-    if (resolveValue.status === 'fulfilled') {
-      return updateRecord(csv[index], { messageId, description });
+  const finalResult = data.map(({ status: responseStatus, value }, index) => {
+    if (responseStatus === 'fulfilled') {
+      const { description } = value.messages[0].status;
+      return populateEmptyField(csv[index], 'description', description, false);
     }
     return csv[index];
   });
 
   return finalResult;
-}
-
-function updateRecord(previousRecord, nextPartialRecord) {
-  const entries = Object.entries(nextPartialRecord);
-  entries.forEach(function ([key, value]) {
-    populateEmptyField(previousRecord, key, value, false);
-  });
-  return previousRecord;
 }
 
 function convertInMemoryCsvToFileType([titles, rows]) {

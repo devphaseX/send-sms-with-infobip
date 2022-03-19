@@ -14,10 +14,6 @@ function promisify(action, ...args) {
   });
 }
 
-function generateRandomId() {
-  return Math.random().toString(32).slice(2);
-}
-
 function checkFileExtension(path, ext) {
   if (!path.endsWith('.' + ext)) {
     throw new TypeError(
@@ -116,33 +112,45 @@ function _createInFileCsvType(data) {
   return _mergeCsvRowValues(data);
 }
 
+function isAccessorPropObject(value) {
+  if (!isNaiveObjectInstance(value)) return false;
+  return ['set', 'get'].some(function (prop) {
+    return prop in value && typeof value[prop] === 'function';
+  });
+}
+
 function _metaLevelConfig(value, isAccessorProp) {
   let behaviourConfig = { enumerable: false, configurable: false };
-  if (!isAccessorProp) {
-    return { value, ...behaviourConfig };
+
+  if (!isAccessorProp) return { value, ...behaviourConfig };
+
+  let isValueAccessorCreator = typeof value === 'function';
+  let isValueAccessorObject = isAccessorPropObject(value);
+
+  if (!(isValueAccessorCreator || isValueAccessorObject)) {
+    throw new TypeError(
+      `Expected an accessor creator function or object accessor, but got ${
+        typeof value !== 'object' ? typeof value : getValueObjectForm(value)
+      }`
+    );
   }
 
-  if (typeof value !== 'function')
-    throw new TypeError(
-      'Expected a function which return object containing accessor property'
-    );
-
-  {
-    const accessor = value();
-
-    if (
-      typeof accessor === 'object' &&
-      accessor &&
-      isNaiveObjectInstance(accessor)
-    ) {
-      const { set, get } = accessor;
-      return Object.assign({ set, get }, behaviourConfig);
+  check: {
+    const accessor = typeof value === 'object' ? value : value();
+    if (!isValueAccessorObject && !isAccessorPropObject(accessor)) {
+      break check;
     }
+    const { set, get } = accessor;
+    return Object.assign({ set, get }, behaviourConfig);
   }
 
   throw new TypeError(
-    'Expect the return value of the function as a object contain either getter or setter method.'
+    'Expect the return value of the function or the object doesnt contain either getter or setter method.'
   );
+}
+
+function getValueObjectForm(value) {
+  return Object.prototype.toString.call(value);
 }
 
 function isNaiveObjectInstance(value) {
@@ -150,7 +158,7 @@ function isNaiveObjectInstance(value) {
 }
 
 function generateMessageId() {
-  return `BULK-ID-${generateRandomId()}`;
+  return Math.random().toString().slice(2);
 }
 
 module.exports = {
@@ -161,8 +169,6 @@ module.exports = {
   promisify,
   linePattern,
   csvFileSeparatorPattern,
-  baseURI,
-  baseApiKey,
   populateEmptyField,
   checkFileExtension,
   isNotEmpty,
