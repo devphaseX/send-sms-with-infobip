@@ -1,135 +1,92 @@
-import fs from 'fs';
-import fetch from 'node-fetch';
 import dotenv from 'dotenv';
+import fetch from 'node-fetch';
+import convertInMemoryCsvToFileType from './lib/csvFormatter/convertInMemoryCsvToFileType.js';
+import createInMemoryCsvForm from './lib/csvFormatter/createInMemoryCSVForm.js';
+import { getCSVData, setCSVData } from './lib/csvFormatter/csv.js';
+import { uuid } from './lib/util/index.js';
+import { insertFieldInRecords } from './lib/util/record.js';
+
+const { BASEURI, BASEAPIKEY } = process.env;
+
 dotenv.config({ path: './local.env' });
 
-import {
-  linePattern,
-  csvFileSeparatorPattern,
-  createIO_Task,
-  zip,
-  _metaLevelConfig,
-  _createInFileCsvType,
-  populateEmptyField,
-  generateMessageId,
-} from './util.js';
-
-const { BASEURI, BASEAPI } = process.env;
-
-const getCSVData = createIO_Task(fs.readFile, 'csv');
-const setCSVData = createIO_Task(fs.writeFile, 'csv');
-
-function createInMemoryCsvForm(data) {
-  function extractRowData([line]) {
-    return line.split(csvFileSeparatorPattern);
-  }
-  const csvData = Array.from(data.matchAll(linePattern), extractRowData);
-
+function createFetchOption(sms, message, { baseApi }) {
   return {
-    titles: csvData[0],
-    rows: createCsvObject(csvData[0], csvData.slice(1)),
+    method: 'post',
+    body: JSON.stringify({
+      messages: [
+        {
+          from: sms.SenderId,
+          destinations: [{ to: sms.MSISDN, messageId: info.messageId }],
+          text: message,
+        },
+      ],
+    }),
+    headers: {
+      Authorization: `App ${baseApi}`,
+      'Content-Type': 'application/json',
+    },
   };
 }
 
-function createCsvObject(csvTitles, csvRows) {
-  function getEmptyProp(row) {
-    return csvTitles.filter(function (title) {
-      return row[title].trim() === '';
-    });
+async function createMessageProcess(smsInCsvFormList) {
+  function createAsyncDataPlaceholder(single) {
+    return fetch(
+      `https://${BASEURI}/sms/2/text/advanced`,
+      createFetchOption(single, 'This is a sample message from the server', {
+        baseApi: BASEAPIKEY,
+      })
+    );
+  }
+  return Promise.allSettled(smsInCsvFormList.map(createAsyncDataPlaceholder));
+}
+
+async function sendSms(smsInCsvFormList) {
+  function autoGenerateId() {
+    return ['messageId', uuid()];
   }
 
-  return csvRows.map((row) => {
-    const csv = Object.fromEntries(zip(csvTitles, row));
-    Object.defineProperty(
-      csv,
-      '_emptyFields',
-      _metaLevelConfig(getEmptyProp(csv))
-    );
-
-    Object.defineProperty(
-      csv,
-      '_csvRawForm',
-      _metaLevelConfig(function () {
-        return {
-          get: function () {
-            return _createInFileCsvType(Object.values(csv));
-          },
-        };
-      }, true)
-    );
-
-    return Object.seal(csv);
+  insertFieldInRecords(smsInCsvFormList, autoGenerateId, function (sms) {
+    return sms._emptyFields.includes('messageId');
   });
-}
 
-function getDescriptionFromInfoBip(csv) {
-  return Promise.allSettled(
-    csv.map((info) => {
-      const fetchOptions = {
-        method: 'post',
-        body: JSON.stringify({
-          messages: [
-            {
-              from: info.SenderId,
-              destinations: [{ to: info.MSISDN, messageId: info.messageId }],
-              text: 'Dear Customer, Thanks for registering with our service.',
-            },
-          ],
-        }),
-        headers: {
-          Authorization: `App ${BASEAPI}`,
-          'Content-Type': 'application/json',
-        },
-      };
+  const msgProcesses = await createMessageProcess(smsInCsvFormList);
+  const finalResult = msgProcesses.map(function (smsProcess, index) {
+    const {
+      status: responseStatus,
+      value: [{ status }],
+    } = smsProcess;
+    if (responseStatus !== 'fulfilled') return csv[index];
 
-      return fetch(`https://${BASEURI}/sms/2/text/advanced`, fetchOptions).then(
-        (response) => response.json()
-      );
-    })
-  );
-}
-
-function insertMessageId(smsEntries) {
-  smsEntries.forEach((entry) => {
-    if (!entry._emptyFields.includes('messageId')) return;
-    populateEmptyField(entry, 'messageId', generateMessageId(), false);
-  });
-}
-
-async function fetchSmsDescription(csv) {
-  insertMessageId(csv);
-  const data = await getDescriptionFromInfoBip(csv);
-
-  const finalResult = data.map(({ status: responseStatus, value }, index) => {
-    if (responseStatus === 'fulfilled') {
-      const { description } = value.messages[0].status;
-      return populateEmptyField(csv[index], 'description', description, false);
-    }
-    return csv[index];
+    return populateEmptyField(
+      csv[index],
+      'description',
+      status.description,
+      false
+    );
   });
 
   return finalResult;
 }
 
-function convertInMemoryCsvToFileType([titles, rows]) {
-  return `${_createInFileCsvType(titles)}\n${rows
-    .map((row) => row._csvRawForm)
-    .join('\n')}`;
-}
-
 async function _init() {
-  const { titles, rows } = await getCSVData('./message.csv', ['utf-8']).then(
-    createInMemoryCsvForm
-  );
+  let inMemoryCSVForm;
+  {
+    const raw = await getCSVData('./message.csv', ['utf-8']);
+    inMemoryCSVForm = createInMemoryCsvForm(raw);
+  }
 
-  const result = await fetchSmsDescription(rows);
-  return [titles, result];
+  const updatedRowData = await sendSms(inMemoryCSVForm.rows);
+  return [inMemoryCSVForm.titles, updatedRowData];
 }
 
 _init()
-  .then((data) => {
-    return setCSVData('./message.csv', [convertInMemoryCsvToFileType(data)]);
+  .then((csv) => {
+    return setCSVData('./message.csv', [convertInMemoryCsvToFileType(csv)]);
   })
   .then(() => {
-    console.log('writing to file complete');
+    console.log('Writing csv file to drive completed...');
+  })
+  .catch((e) => {
+    console.log(e.message);
   });
