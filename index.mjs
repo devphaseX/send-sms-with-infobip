@@ -17,7 +17,7 @@ function createFetchOption(sms, message, { baseApi }) {
       messages: [
         {
           from: sms.SenderId,
-          destinations: [{ to: sms.MSISDN, messageId: info.messageId }],
+          destinations: [{ to: sms.MSISDN, messageId: sms.messageId }],
           text: message,
         },
       ],
@@ -38,7 +38,9 @@ async function createMessageProcess(smsInCsvFormList) {
       })
     );
   }
-  return Promise.allSettled(smsInCsvFormList.map(createAsyncDataPlaceholder));
+  return await Promise.allSettled(
+    smsInCsvFormList.map(createAsyncDataPlaceholder)
+  );
 }
 
 async function sendSms(smsInCsvFormList) {
@@ -52,14 +54,11 @@ async function sendSms(smsInCsvFormList) {
 
   const msgProcesses = await createMessageProcess(smsInCsvFormList);
   const finalResult = msgProcesses.map(function (smsProcess, index) {
-    const {
-      status: responseStatus,
-      value: [{ status }],
-    } = smsProcess;
-    if (responseStatus !== 'fulfilled') return csv[index];
+    if (smsProcess.status !== 'fulfilled') return smsInCsvFormList[index];
+    const [{ status }] = smsProcess.value;
 
     return populateEmptyField(
-      csv[index],
+      smsInCsvFormList[index],
       'description',
       status.description,
       false
